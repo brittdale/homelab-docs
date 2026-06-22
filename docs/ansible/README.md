@@ -114,7 +114,7 @@ ssh-copy-id YOUR_USER@<node-ip>
 nano inventory/hosts.ini
 
 # 4. Bootstrap ansible service account
-ansible-playbook playbooks/setup-ansible-user-dale.yml --limit <node-name>
+ansible-playbook playbooks/setup-ansible-user-<username>.yml --limit <node-name>
 
 # 5. Verify
 ansible <node-name> -m ping
@@ -170,7 +170,7 @@ ansible-playbook playbooks/node-prep.yml \
 ### Phase 3 — Tailscale
 
 ```bash
-# Store Tailscale auth key in vault first
+# Store Tailscale auth key in vault first get from Tailscale admin console
 ansible-vault create group_vars/k3s.yml
 # Add: vault_tailscale_authkey: "tskey-auth-YOUR-KEY"
 
@@ -382,7 +382,7 @@ chmod 600 ~/.vault_pass
 | `snapshot-all.yml` | Proxmox CT/VM snapshots | Before any major change |
 | `update_nodes.yml` | Update all packages | Regularly |
 | `setup-ansible-user.yml` | Create ansible service account | New nodes (ansible SSH already works) |
-| `setup-ansible-user-dale.yml` | Bootstrap as your user | New nodes (manual SSH works) |
+| `setup-ansible-user-<username>.yml` | Bootstrap as your user | New nodes (manual SSH works) |
 | `create-template-per-node.yml` | Ubuntu 22.04 cloud-init templates | One time per node |
 | `create-k3s-vms.yml` | Clone VMs for k3s | Initial k3s setup |
 | `node-prep.yml` | Prepare nodes for k3s | Before k3s install |
