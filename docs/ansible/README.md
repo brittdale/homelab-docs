@@ -125,6 +125,14 @@ git commit -m "Add <node-name> to inventory"
 git push
 ```
 
+> The first time Ansible connects to a new node, SSH will need to accept
+> that node's host key. With `StrictHostKeyChecking=accept-new` (see
+> `ansible.cfg` below), this happens automatically with no manual prompt
+> — but if a node you've connected to before ever shows up with a
+> *different* key, the connection will fail loudly instead of silently
+> trusting it. That failure is a signal worth investigating (reimaged
+> node, IP reuse, or worse), not something to immediately suppress.
+
 ---
 
 ## Playbook Reference — Full Deployment Order
@@ -169,6 +177,18 @@ ansible-vault create group_vars/k3s.yml
 # Install and authenticate Tailscale on all k3s VMs
 ansible-playbook playbooks/install-tailscale.yml --ask-vault-pass
 ```
+
+> **Security note on the auth key above:** a single long-lived reusable
+> key stored in Ansible Vault is simple and works fine for a
+> single-operator homelab, but Tailscale's own documentation is explicit
+> that reusable keys are sensitive and "can be very dangerous if stolen"
+> — they're valid for up to 90 days and authorize any device that
+> presents them. If you want tighter security than a Vault-encrypted
+> static key, Tailscale's current recommendation for automation is an
+> **OAuth client** instead: it issues short-lived, tag-scoped keys on
+> demand rather than one long-lived secret sitting in a file. Worth
+> migrating to if this repo ever moves beyond a single trusted operator.
+> See [Tailscale OAuth clients](https://tailscale.com/docs/features/oauth-clients).
 
 ### Phase 4 — k3s Deployment
 
@@ -380,7 +400,7 @@ chmod 600 ~/.vault_pass
 [defaults]
 inventory = inventory/hosts.ini
 remote_user = ansible
-host_key_checking = False
+host_key_checking = True
 timeout = 30
 forks = 10
 # vault_password_file = ~/.vault_pass
@@ -394,8 +414,20 @@ become_ask_pass = false
 
 [ssh_connection]
 pipelining = true
-ssh_args = -o StrictHostKeyChecking=no -o ControlMaster=auto -o ControlPersist=60s
+ssh_args = -o StrictHostKeyChecking=accept-new -o ControlMaster=auto -o ControlPersist=60s
 ```
+
+> **Why `accept-new` instead of disabling host key checking entirely:**
+> `host_key_checking = False` combined with `StrictHostKeyChecking=no`
+> (the old settings in this section) silently accepts *any* host key for
+> *any* host, every time — including a host whose key has changed since
+> the last time Ansible connected to it. That's exactly the situation
+> that should raise a flag (a node was reimaged unexpectedly, an IP got
+> reused by a different device, or — worst case — a
+> machine-in-the-middle). `accept-new` keeps the same zero-prompt
+> convenience for nodes Ansible hasn't seen before, while still failing
+> loudly if a *known* node's key changes. For a stable homelab with fixed
+> node IPs, this costs nothing and buys back a real security property.
 
 ---
 
@@ -461,6 +493,14 @@ klog     # kubectl logs
 - All secrets encrypted with Ansible Vault
 - k3s cluster traffic routes over encrypted Tailscale WireGuard mesh
 - Vault files are excluded from git via `.gitignore`
+- SSH host key checking is enabled, with `StrictHostKeyChecking=accept-new`
+  so new nodes connect without a manual prompt while existing nodes are
+  still protected against an unexpected key change (see `ansible.cfg`
+  reference above)
+- The Tailscale auth key is a long-lived reusable key stored in Ansible
+  Vault; consider migrating to a Tailscale OAuth client for shorter-lived,
+  tag-scoped credentials if this repo grows beyond a single operator (see
+  Phase 3 above)
 
 ---
 
