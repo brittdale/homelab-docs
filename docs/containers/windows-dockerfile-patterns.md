@@ -1,8 +1,8 @@
 # Windows Dockerfile Patterns — Complete Mastery Reference
 
-**Domain:** Windows Container Image Engineering  
-**Scope:** Dockerfile syntax for Windows, base image selection, Registry manipulation, PowerShell scripting in builds, multi-stage builds, layer optimization, and real-world application patterns  
-**Last Updated:** 2026-06-13  
+**Domain:** Windows Container Image Engineering
+**Scope:** Dockerfile syntax for Windows, base image selection, Registry manipulation, PowerShell scripting in builds, multi-stage builds, layer optimization, and real-world application patterns
+**Last Updated:** 2026-06-22
 **File Path:** `windows-dockerfile-patterns.md`
 
 ---
@@ -81,10 +81,10 @@ Choosing the wrong base image is the single most common Windows container mistak
 FROM mcr.microsoft.com/windows/nanoserver:ltsc2022
 ```
 
-- **Size:** ~100MB compressed
-- **Shell:** `cmd.exe` only — **no PowerShell**
+- **Size:** ~260–300MB compressed
+- **Shell:** `cmd.exe` for basic operations — **no PowerShell by default**
 - **Has:** .NET runtime (if you use the .NET nanoserver variant), basic Win32 APIs
-- **Missing:** PowerShell, WMI, most Win32 APIs, MSI installer support, many system DLLs
+- **Missing:** PowerShell (unless installed separately), WMI, most Win32 APIs, MSI installer support, many system DLLs
 - **Use for:** .NET 6+ apps, Go binaries compiled for Windows, minimal CLI tools
 - **Do NOT use for:** Anything needing PowerShell during runtime, WMI queries, MSI installs, IIS
 
@@ -127,12 +127,15 @@ FROM mcr.microsoft.com/windows:ltsc2022
 
 | Tag | Windows Version | Notes |
 |-----|----------------|-------|
-| `ltsc2022` | Windows Server 2022 / Windows 11 | Current LTS — use this |
+| `ltsc2025` | Windows Server 2025 | Newest LTS — use this if your host runs Server 2025 |
+| `ltsc2022` | Windows Server 2022 / Windows 11 | Widely used current LTS — use this if your host runs Server 2022 |
 | `ltsc2019` | Windows Server 2019 / Windows 10 1809 | Previous LTS |
 | `ltsc2016` | Windows Server 2016 | Legacy — avoid for new builds |
 | `20H2`, `21H2`, `22H2` | Semi-annual channel releases | Short support windows |
 
-> ⚠️ **Never use `latest` for Windows base images in production.** The `latest` tag can shift to a new OS version and break Process Isolation compatibility. Always pin to `ltsc2022` or equivalent.
+> ⚠️ **Never use `latest` for Windows base images.** Microsoft does not publish or maintain a `latest` tag for the Windows Server, Windows Server Core, or Nano Server base images at all — you must declare a specific tag every time. Beyond that, even if you pin to a moving alias, the underlying OS version can shift and break Process Isolation compatibility. Always pin to an explicit tag like `ltsc2022` or `ltsc2025`.
+
+> 🎯 **The host and container OS versions must match (or use Hyper-V isolation).** Windows containers — unlike Linux containers — require the container's base OS build to match the host's build when using the default Process Isolation mode. If your host is Windows Server 2022, build with `ltsc2022`. If it's Server 2025, build with `ltsc2025`. Mismatches fail at `docker run` with an OS version compatibility error (see Section 19). If you need to run a container built for an older OS version on a newer host, use `docker run --isolation=hyperv` instead of rebuilding.
 
 ### .NET-Specific Base Images (Preferred for .NET Apps)
 
@@ -150,6 +153,10 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0-nanoserver-ltsc2022
 
 # .NET Framework 4.8 (legacy — requires servercore)
 FROM mcr.microsoft.com/dotnet/framework/aspnet:4.8-windowsservercore-ltsc2022
+
+# .NET 10 is also current — same pattern, both ltsc2022 and ltsc2025 variants exist
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-nanoserver-ltsc2022
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-nanoserver-ltsc2025
 ```
 
 ---
@@ -239,7 +246,7 @@ ENV LOG_LEVEL=info
 ENV APP_VERSION=1.0.0 APP_HOME=C:\app LOG_LEVEL=info
 ```
 
-Access in `cmd.exe`: `%APP_VERSION%`  
+Access in `cmd.exe`: `%APP_VERSION%`
 Access in PowerShell: `$env:APP_VERSION`
 
 ### ARG
@@ -652,7 +659,7 @@ ENV APP_VERSION=${APP_VERSION}
 # Pass ARG values at build time
 docker build `
   --build-arg BUILD_VERSION=2.1.0 `
-  --build-arg REGISTRY=gitea.brittainhub.local `
+  --build-arg REGISTRY=registry.example.local `
   -t myapp:2.1.0 .
 ```
 
@@ -683,7 +690,7 @@ ENV DB_PASSWORD=mysecretpassword    # BAD — baked into image permanently
 ```
 
 Handle secrets at runtime via:
-- `docker run -e DB_PASSWORD=... `
+- `docker run -e DB_PASSWORD=...`
 - Docker secrets (Swarm)
 - Kubernetes Secrets mounted as env vars
 - External secret managers (Vault, AWS SSM)
@@ -717,9 +724,12 @@ RUN New-Service `
       -StartupType Automatic `
       -Description "My containerized Windows service"
 
-# Download ServiceMonitor (or extract from the IIS image in a multi-stage build)
+# Download ServiceMonitor, pinned to a specific release rather than
+# "latest" so builds stay reproducible. Check
+# https://github.com/microsoft/IIS.ServiceMonitor/releases for the
+# current version before using this in a new project.
 RUN Invoke-WebRequest `
-      -Uri "https://github.com/microsoft/IIS.ServiceMonitor/releases/latest/download/ServiceMonitor.exe" `
+      -Uri "https://github.com/microsoft/IIS.ServiceMonitor/releases/download/v2.0.1.10/ServiceMonitor.exe" `
       -OutFile "C:\ServiceMonitor.exe"
 
 # ServiceMonitor watches "MyService" — exits immediately when the service stops
@@ -727,6 +737,8 @@ ENTRYPOINT ["C:\\ServiceMonitor.exe", "MyService"]
 ```
 
 > 🎯 **Why this is better than a polling loop:** ServiceMonitor uses Windows event notification — zero CPU overhead while the service runs. It also exits the instant the service stops, giving Kubernetes a clean failure signal to trigger a Pod restart.
+>
+> 📌 **Pin the version, don't use `releases/latest/download/`.** A `releases/latest` URL silently resolves to whatever the newest release happens to be at build time — which means the same Dockerfile can pull a different binary today than it did last month, with no record of which version actually shipped in a given image. Pinning to an explicit tag (as above) makes builds reproducible and auditable. The note about the old `dotnetbinaries.blob.core.windows.net` download location is now historical — that location was decommissioned and current builds should only ever reference the `github.com/microsoft/IIS.ServiceMonitor/releases` location shown here.
 
 #### Pattern B: PowerShell Event-Driven Loop (Homelab/Custom Services)
 
@@ -807,16 +819,18 @@ RUN Import-Module WebAdministration ; \
 # (via ServiceMonitor.exe watching the W3SVC service)
 ```
 
+> ⚠️ **Note on browsing the IIS site from the container host:** Microsoft's own IIS image documentation notes that `http://localhost` does not reach the container from the host due to a known WinNAT behavior — this is the same underlying issue covered in Section 11's HNS port-binding gotcha. Use the container's IP address (`docker inspect`) to browse from the host, or rely on the mapped port from another machine on the network.
+
 ---
 
 ## 10. Multi-Stage Builds for Windows
 
-Multi-stage builds let you use a large SDK image to compile your application, then copy only the compiled output into a small runtime image. This is critical for Windows — the SDK images are enormous (6GB+), but runtime images can be ~100MB.
+Multi-stage builds let you use a large SDK image to compile your application, then copy only the compiled output into a small runtime image. This is critical for Windows — the SDK images are enormous (6GB+), but runtime images can be ~300MB.
 
 ### .NET Application Multi-Stage Build
 
 ```dockerfile
-# ─── Stage 1: Build ───────────────────────────────────────────────
+# ───────────────────────────── Stage 1: Build ─────────────────────────────
 FROM mcr.microsoft.com/dotnet/sdk:8.0-windowsservercore-ltsc2022 AS build-env
 
 WORKDIR C:\src
@@ -829,7 +843,7 @@ RUN dotnet restore
 COPY . .
 RUN dotnet publish -c Release -o C:\app\publish --no-restore
 
-# ─── Stage 2: Runtime ─────────────────────────────────────────────
+# ──────────────────────────── Stage 2: Runtime ────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-nanoserver-ltsc2022 AS runtime
 
 WORKDIR C:\app
@@ -849,7 +863,7 @@ ENTRYPOINT ["dotnet", "MyApp.dll"]
 Go compiles to a single self-contained binary — perfect for nanoserver:
 
 ```dockerfile
-# ─── Stage 1: Build ───────────────────────────────────────────────
+# ───────────────────────────── Stage 1: Build ─────────────────────────────
 FROM golang:1.22-windowsservercore-ltsc2022 AS build-env
 
 WORKDIR C:\src
@@ -858,7 +872,7 @@ COPY . .
 # Build a Windows binary
 RUN go build -ldflags="-s -w" -o C:\app\myapp.exe .
 
-# ─── Stage 2: Runtime ─────────────────────────────────────────────
+# ──────────────────────────── Stage 2: Runtime ────────────────────────────
 FROM mcr.microsoft.com/windows/nanoserver:ltsc2022 AS runtime
 
 WORKDIR C:\app
@@ -873,7 +887,7 @@ CMD ["myapp.exe"]
 Sometimes you need a separate stage just to download and prepare dependencies:
 
 ```dockerfile
-# ─── Stage 1: Download dependencies ──────────────────────────────
+# ──────────────────────── Stage 1: Download dependencies ──────────────────
 FROM mcr.microsoft.com/windows/servercore:ltsc2022 AS downloader
 
 SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
@@ -881,7 +895,7 @@ SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPref
 RUN Invoke-WebRequest -Uri "https://example.com/dep1.zip" -OutFile C:\downloads\dep1.zip ; \
     Expand-Archive C:\downloads\dep1.zip -DestinationPath C:\deps\dep1\ -Force
 
-# ─── Stage 2: Build ───────────────────────────────────────────────
+# ───────────────────────────── Stage 2: Build ──────────────────────────────
 FROM mcr.microsoft.com/dotnet/sdk:8.0-windowsservercore-ltsc2022 AS builder
 
 COPY --from=downloader C:\deps\ C:\deps\
@@ -889,7 +903,7 @@ COPY . C:\src\
 WORKDIR C:\src
 RUN dotnet publish -c Release -o C:\publish
 
-# ─── Stage 3: Runtime ─────────────────────────────────────────────
+# ──────────────────────────── Stage 3: Runtime ─────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-nanoserver-ltsc2022
 
 COPY --from=builder C:\publish\ C:\app\
@@ -952,6 +966,8 @@ docker run --network mynet mywinapp:latest
 ### The HNS Port-Binding Trap — Bind to 0.0.0.0, Not localhost
 
 > ⚠️ **Critical runtime gotcha:** Inside a Windows container, services that bind only to `127.0.0.1` or `localhost` will **not** accept traffic coming in through the HNS-mapped host port. The port mapping appears correct (`-p 80:80`), the container runs without error, but external connections are silently refused.
+>
+> This is a long-standing, well-documented behavior — Microsoft's own IIS container image documentation notes the same WinNAT limitation, and it remains a live, frequently-hit issue years after Windows containers first shipped. It is not a bug specific to your setup; it is how Windows container networking currently works.
 
 The fix is always to configure your application to bind to `0.0.0.0` (all interfaces) so HNS can route external ingress to it:
 
@@ -1361,7 +1377,7 @@ docker tag mywinapp:1.0 mywinapp:1.0-ltsc2022
 docker tag mywinapp:1.0 mywinapp:latest-windows
 
 # Tag for a private registry
-docker tag mywinapp:1.0 gitea.brittainhub.local:5000/brittainhub/mywinapp:1.0-ltsc2022
+docker tag mywinapp:1.0 myregistry.example.com:5000/myorg/mywinapp:1.0-ltsc2022
 
 # List all tags
 docker images mywinapp
@@ -1371,20 +1387,20 @@ docker images mywinapp
 
 ## 17. Pushing to a Registry
 
-### Pushing to Gitea Container Registry
+### Pushing to a Self-Hosted Registry (e.g. Gitea, Harbor, generic OCI registry)
 
 ```powershell
-# Log in to Gitea registry
-docker login gitea.brittainhub.local:5000 -u dale -p <token>
+# Log in to your registry
+docker login myregistry.example.com:5000 -u myuser -p <token>
 
-# Tag the image for Gitea
-docker tag mywinapp:1.0-ltsc2022 gitea.brittainhub.local:5000/dale/mywinapp:1.0-ltsc2022
+# Tag the image for your registry
+docker tag mywinapp:1.0-ltsc2022 myregistry.example.com:5000/myuser/mywinapp:1.0-ltsc2022
 
 # Push
-docker push gitea.brittainhub.local:5000/dale/mywinapp:1.0-ltsc2022
+docker push myregistry.example.com:5000/myuser/mywinapp:1.0-ltsc2022
 
 # Pull (on another machine)
-docker pull gitea.brittainhub.local:5000/dale/mywinapp:1.0-ltsc2022
+docker pull myregistry.example.com:5000/myuser/mywinapp:1.0-ltsc2022
 ```
 
 ### Pushing to Docker Hub
@@ -1520,6 +1536,7 @@ docker run --isolation=hyperv mywinapp:ltsc2019
 
 # Fix 2: Rebuild image with matching base image version
 # Host is Windows Server 2022 → use ltsc2022 base image
+# Host is Windows Server 2025 → use ltsc2025 base image
 ```
 
 ### MSI Install Hangs During Build
@@ -1543,7 +1560,7 @@ RUN Start-Process msiexec.exe -ArgumentList "/i", "C:\Temp\app.msi", "/qn", "/no
 FROM mcr.microsoft.com/windows/nanoserver:ltsc2022
 
 # Set a label
-LABEL maintainer="dale@brittainservices.com"
+LABEL maintainer="you@example.com"
 LABEL version="1.0"
 
 # Create a directory and write a file
@@ -1555,19 +1572,19 @@ CMD ["cmd", "/c", "type C:\\app\\hello.txt"]
 ```
 
 ```powershell
-# hello.txt content: "Hello from BrittainHub Windows Container!"
+# hello.txt content: "Hello from a Windows Container!"
 
 # Switch to Windows mode
 & "C:\Program Files\Docker\Docker\DockerCli.exe" -SwitchDaemon
 
 # Build
-docker build -t brittainhub/hello-windows:1.0 .
+docker build -t hello-windows:1.0 .
 
 # Run
-docker run --rm brittainhub/hello-windows:1.0
+docker run --rm hello-windows:1.0
 
 # Inspect layers
-docker history brittainhub/hello-windows:1.0
+docker history hello-windows:1.0
 ```
 
 ### Task 2: Registry Manipulation in a Build
@@ -1578,23 +1595,23 @@ FROM mcr.microsoft.com/windows/servercore:ltsc2022
 SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
 
 # Write app config to Registry
-RUN New-Item -Path "HKLM:\SOFTWARE\BrittainHub" -Force ; \
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\BrittainHub" -Name "Environment" -Value "homelab" ; \
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\BrittainHub" -Name "Version" -Value "1.0.0" ; \
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\BrittainHub" -Name "NodeCount" -Value 6 -Type DWord
+RUN New-Item -Path "HKLM:\SOFTWARE\MyHomelab" -Force ; \
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\MyHomelab" -Name "Environment" -Value "homelab" ; \
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\MyHomelab" -Name "Version" -Value "1.0.0" ; \
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\MyHomelab" -Name "NodeCount" -Value 6 -Type DWord
 
 # Verify the values were written
-RUN $props = Get-ItemProperty "HKLM:\SOFTWARE\BrittainHub" ; \
+RUN $props = Get-ItemProperty "HKLM:\SOFTWARE\MyHomelab" ; \
     Write-Host "Environment: $($props.Environment)" ; \
     Write-Host "Version: $($props.Version)" ; \
     Write-Host "NodeCount: $($props.NodeCount)"
 
-CMD ["powershell", "-Command", "Get-ItemProperty HKLM:\\SOFTWARE\\BrittainHub"]
+CMD ["powershell", "-Command", "Get-ItemProperty HKLM:\\SOFTWARE\\MyHomelab"]
 ```
 
 ```powershell
-docker build -t brittainhub/registry-demo:1.0 .
-docker run --rm brittainhub/registry-demo:1.0
+docker build -t registry-demo:1.0 .
+docker run --rm registry-demo:1.0
 ```
 
 ### Task 3: Multi-Stage Build — Size Comparison
@@ -1630,21 +1647,21 @@ docker images myapp
 # The difference will be several GB
 ```
 
-### Task 4: Push a Windows Image to Your Gitea Registry
+### Task 4: Push a Windows Image to a Self-Hosted Registry
 
 ```powershell
-# Tag for Gitea
-docker tag brittainhub/hello-windows:1.0 gitea.brittainhub.local:5000/dale/hello-windows:1.0-ltsc2022
+# Tag for your registry
+docker tag hello-windows:1.0 myregistry.example.com:5000/myuser/hello-windows:1.0-ltsc2022
 
 # Log in
-docker login gitea.brittainhub.local:5000
+docker login myregistry.example.com:5000
 
 # Push
-docker push gitea.brittainhub.local:5000/dale/hello-windows:1.0-ltsc2022
+docker push myregistry.example.com:5000/myuser/hello-windows:1.0-ltsc2022
 
 # Pull on another machine to verify
-docker pull gitea.brittainhub.local:5000/dale/hello-windows:1.0-ltsc2022
-docker run --rm gitea.brittainhub.local:5000/dale/hello-windows:1.0-ltsc2022
+docker pull myregistry.example.com:5000/myuser/hello-windows:1.0-ltsc2022
+docker run --rm myregistry.example.com:5000/myuser/hello-windows:1.0-ltsc2022
 ```
 
 ### Task 5: Deploy a Windows Container Image to Kubernetes
@@ -1675,7 +1692,7 @@ spec:
           effect: "NoSchedule"
       containers:
         - name: hello-windows
-          image: gitea.brittainhub.local:5000/dale/hello-windows:1.0-ltsc2022
+          image: myregistry.example.com:5000/myuser/hello-windows:1.0-ltsc2022
           resources:
             limits:
               memory: "256Mi"
@@ -1705,6 +1722,8 @@ Does your app need .NET?
         └── No PowerShell needed, self-contained binary?
               └── Yes  → mcr.microsoft.com/windows/nanoserver:ltsc2022
 ```
+
+> Substitute `ltsc2025` throughout if your host is running Windows Server 2025 — see Section 2's note on matching host and container OS versions.
 
 ### SHELL Declaration (Always Include This)
 
@@ -1756,10 +1775,10 @@ SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPref
 | Config location | `/etc/` | Registry or `C:\app\` |
 | Service manager | `systemd` / `supervisord` | `sc.exe` / `New-Service` |
 | Default user | `root` | `ContainerAdministrator` |
-| Base image size | 5–50MB (alpine) | 100MB–5GB |
+| Base image size | 5–50MB (alpine) | 260MB–5GB |
 | Layer storage | OverlayFS | windowsfilter |
 
 ---
 
-*File: `windows-dockerfile-patterns.md`*  
+*File: `windows-dockerfile-patterns.md`*
 *See also: `windows-linux-containers-vms-complete.md` | `kubernetes-hybrid-architecture.md`*
