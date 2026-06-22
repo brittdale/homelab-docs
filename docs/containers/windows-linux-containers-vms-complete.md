@@ -1,8 +1,8 @@
 # Windows & Linux Containers and VMs — Complete Mastery Reference
 
-**Domain:** Container Orchestration, Virtualization, and Hybrid OS Management  
-**Scope:** Standalone operation, Kubernetes integration, Windows Registry, PowerShell command authority, and cross-platform connectivity  
-**Last Updated:** 2026-06-13  
+**Domain:** Container Orchestration, Virtualization, and Hybrid OS Management
+**Scope:** Standalone operation, Kubernetes integration, Windows Registry, PowerShell command authority, and cross-platform connectivity
+**Last Updated:** 2026-06-22
 **File Path:** `windows-linux-containers-vms-complete.md`
 
 ---
@@ -21,7 +21,7 @@
 10. [Standalone Usage — Running Without Kubernetes](#10-standalone-usage--running-without-kubernetes)
 11. [Kubernetes Integration — Linux Containers](#11-kubernetes-integration--linux-containers)
 12. [Kubernetes Integration — Windows Containers](#12-kubernetes-integration--windows-containers)
-13. [Kubernetes Integration — VMs (Kubevirt)](#13-kubernetes-integration--vms-kubevirt)
+13. [Kubernetes Integration — VMs (KubeVirt)](#13-kubernetes-integration--vms-kubevirt)
 14. [Cross-Platform Connectivity — How Linux and Windows Nodes Communicate](#14-cross-platform-connectivity--how-linux-and-windows-nodes-communicate)
 15. [Scheduling and Affinity — Keeping Workloads on the Right OS](#15-scheduling-and-affinity--keeping-workloads-on-the-right-os)
 16. [Storage Boundaries Across OS Types](#16-storage-boundaries-across-os-types)
@@ -110,11 +110,11 @@ The container image contains:
 ### Linux Container Image Layers
 
 ```
-┌─────────────────────────────┐  ← Writable container layer (your runtime changes)
-├─────────────────────────────┤  ← App layer (nginx binary, config)
-├─────────────────────────────┤  ← Dependency layer (libssl, libc)
-└─────────────────────────────┘  ← Base OS layer (debian:slim filesystem)
-                                    (read-only, shared across containers)
+┌──────────────────────────────────────────┐  ← Writable container layer (your runtime changes)
+├──────────────────────────────────────────┤  ← App layer (nginx binary, config)
+├──────────────────────────────────────────┤  ← Dependency layer (libssl, libc)
+└──────────────────────────────────────────┘  ← Base OS layer (debian:slim filesystem)
+                                              (read-only, shared across containers)
 ```
 
 Each layer is a diff. The union filesystem (OverlayFS on modern Linux) stacks them. Multiple containers sharing the same base image share those read-only layers in memory and on disk.
@@ -196,7 +196,7 @@ docker compose down -v
 
 ### The Hypervisor Types
 
-**Type 1 (Bare Metal)** — Proxmox KVM/QEMU. The hypervisor IS the operating system. It runs directly on hardware. VMs run on top of it. This is what BrittainHub runs.
+**Type 1 (Bare Metal)** — Proxmox KVM/QEMU. The hypervisor IS the operating system. It runs directly on hardware. VMs run on top of it. This is the typical homelab Proxmox setup.
 
 **Type 2 (Hosted)** — VMware Workstation, VirtualBox, Hyper-V on Windows desktop. The hypervisor runs as an application inside a host OS.
 
@@ -307,12 +307,12 @@ Microsoft provides official base images. You choose based on what your app needs
 
 | Image | Size | Use Case |
 |-------|------|----------|
-| `mcr.microsoft.com/windows/nanoserver` | ~100MB | Smallest. .NET apps, CLI tools. No PowerShell (only cmd.exe). |
-| `mcr.microsoft.com/windows/servercore` | ~4GB | Full Win32 API. PowerShell included. Most compatible. |
+| `mcr.microsoft.com/windows/nanoserver` | ~260–300MB | Smallest. .NET apps, CLI tools. cmd.exe only — no PowerShell unless installed separately. |
+| `mcr.microsoft.com/windows/servercore` | ~3.5GB | Full Win32 API. PowerShell included. Most compatible. |
 | `mcr.microsoft.com/windows/server` | ~5GB | Full Windows Server experience inside a container. |
 | `mcr.microsoft.com/windows` | ~3GB | General purpose. Includes most APIs. |
 
-> ⚠️ **Version pinning is mandatory.** Windows containers must match the host kernel version or use Hyper-V isolation. Example: `nanoserver:ltsc2022` runs on Windows Server 2022 or Windows 11 (22H2+) hosts. Mismatching without Hyper-V isolation causes immediate failure.
+> ⚠️ **Version pinning is mandatory.** Windows containers must match the host kernel version or use Hyper-V isolation. Example: `nanoserver:ltsc2022` runs on Windows Server 2022 or Windows 11 (22H2+) hosts. As of mid-2026, `ltsc2025` (Windows Server 2025) tags also exist as a current option — match whichever LTSC release your host actually runs. Mismatching without Hyper-V isolation causes immediate failure.
 
 ### The Two Isolation Modes (Critical Distinction)
 
@@ -345,12 +345,14 @@ Microsoft provides official base images. You choose based on what your app needs
 ```
 
 - Each container gets its own isolated, minimal Hyper-V VM
-- Solves version mismatch — the micro-VM provides the correct kernel version
+- Solves version mismatch in **standalone Docker** — the micro-VM provides the correct kernel version
 - Slower startup (~1-2 seconds vs milliseconds), more overhead
 - **Default mode on Windows 10/11 desktop** (because desktop kernel ≠ server kernel)
-- Required when running older container versions on newer hosts
+- Available as an option when running older container versions on newer Windows Server hosts **outside Kubernetes**
 
-> ⚠️ **Windows 10/11 Desktop editions only support Hyper-V Isolation — Process Isolation is not available.** The kernel version difference between desktop editions and Windows Server editions makes direct process sharing impossible. This is not configurable. Only Windows Server 2019/2022 supports Process Isolation.
+> ⚠️ **Windows 10/11 Desktop editions only support Hyper-V Isolation — Process Isolation is not available.** The kernel version difference between desktop editions and Windows Server editions makes direct process sharing impossible. This is not configurable. Only Windows Server 2019/2022/2025 supports Process Isolation.
+
+> ⚠️ **Critical Kubernetes-specific exception: Hyper-V isolation is NOT supported inside Kubernetes at all.** This is easy to miss because Hyper-V isolation works perfectly well as a standalone `docker run --isolation=hyperv` escape hatch — but current Kubernetes documentation states plainly that Kubernetes does not support running Windows containers with Hyper-V isolation. Inside a Kubernetes cluster specifically, Process Isolation with an exact host/container OS version match is mandatory; there is no Hyper-V fallback for a version mismatch the way there is with plain Docker. Plan your Windows node OS version and your container base image version together from the start if Kubernetes is the target.
 
 > ⚠️ **localhost port forwarding quirk on Windows desktop:** Because every Windows container on a desktop host runs inside its own Hyper-V micro-VM, `localhost:80` on the Windows host does not always reliably forward to a container port even when `-p 80:80` is specified. If a containerized web service appears to be running but the browser cannot reach `http://localhost:80`, grab the container's internal IP directly and hit that instead:
 > ```powershell
@@ -386,7 +388,7 @@ docker ps
 # Execute command inside running Windows container
 docker exec -it iis-web cmd.exe
 
-# Force Hyper-V isolation explicitly
+# Force Hyper-V isolation explicitly (standalone Docker only — not valid inside Kubernetes)
 docker run -it --isolation=hyperv mcr.microsoft.com/windows/nanoserver:ltsc2019 cmd.exe
 
 # Force process isolation explicitly
@@ -430,8 +432,8 @@ Windows 11 Pro and Windows Server include **Hyper-V**, a Type-1 hypervisor built
 
 ```
 [ Root Partition (your Windows 11 desktop) ]   [ Child VM: Ubuntu ]   [ Child VM: Windows Server ]
-             │                                          │                        │
-             └──────────────────────────────────────────┴────────────────────────┘
+             │                                          │                       │
+             └──────────────────────────────────────────┴───────────────────────┘
                                           │
                               [ Hyper-V Hypervisor ]  ← runs at ring -1 (below the OS)
                                           │
@@ -564,14 +566,14 @@ From the perspective of anything running inside WSL2 — including `k3s-agent` �
 
 ```
 # Inside WSL2 — standard Linux filesystem
-/home/dale/              ← your Linux home directory
+/home/<user>/            ← your Linux home directory
 /etc/                    ← Linux config files
 /mnt/c/                  ← your Windows C:\ drive mounted here
 /mnt/d/                  ← your Windows D:\ drive mounted here
 
 # From Windows — access WSL2 filesystem via network path
 \\wsl$\Ubuntu\           ← maps to WSL2 root /
-\\wsl$\Ubuntu\home\dale\ ← maps to /home/dale/
+\\wsl$\Ubuntu\home\<user>\ ← maps to /home/<user>/
 ```
 
 > ⚠️ **Performance warning:** Accessing WSL2 files through `\\wsl$\` from Windows (or accessing Windows files from `/mnt/c/` inside WSL2) crosses the 9P filesystem bridge and is significantly slower than staying within one filesystem. Keep project files in the WSL2 native filesystem for performance.
@@ -824,7 +826,7 @@ Get-ChildItem -Path HKLM:\SOFTWARE -Recurse -ErrorAction SilentlyContinue |
 ### Docker Commands in PowerShell
 
 ```powershell
-# ── IMAGE MANAGEMENT ──────────────────────────────────────────────
+# ───────── IMAGE MANAGEMENT ─────────
 docker images                             # List local images
 docker pull mcr.microsoft.com/windows/nanoserver:ltsc2022
 docker rmi mcr.microsoft.com/windows/nanoserver:ltsc2022
@@ -834,7 +836,7 @@ docker image prune -a                     # Remove all unused images
 docker build -t myapp:1.0 .
 docker build -t myapp:1.0 -f Dockerfile.windows .
 
-# ── CONTAINER LIFECYCLE ───────────────────────────────────────────
+# ───────── CONTAINER LIFECYCLE ─────────
 docker run -it <image> cmd.exe            # Interactive Windows shell
 docker run -it <image> powershell.exe     # Interactive PowerShell
 docker run -d --name myapp -p 80:80 <image>  # Detached
@@ -844,7 +846,7 @@ docker restart myapp
 docker rm myapp
 docker rm -f myapp                        # Force remove running container
 
-# ── INSPECTION ────────────────────────────────────────────────────
+# ───────── INSPECTION ─────────
 docker ps                                 # Running containers
 docker ps -a                              # All containers (including stopped)
 docker inspect myapp                      # Full JSON details
@@ -853,19 +855,19 @@ docker logs -f myapp                      # Follow log output
 docker stats                              # Live resource usage
 docker top myapp                          # Processes inside container
 
-# ── NETWORKING ────────────────────────────────────────────────────
+# ───────── NETWORKING ─────────
 docker network ls
 docker network inspect bridge
 docker network create --driver nat mynet   # Windows uses 'nat', Linux uses 'bridge'
 docker run --network mynet <image>
 
-# ── VOLUMES ───────────────────────────────────────────────────────
+# ───────── VOLUMES ─────────
 docker volume ls
 docker volume create mydata
 docker run -v mydata:C:\data <image>      # Windows path in container
 docker run -v C:\host\path:C:\container\path <image>  # Bind mount
 
-# ── SYSTEM ────────────────────────────────────────────────────────
+# ───────── SYSTEM ─────────
 docker system prune                       # Remove stopped containers, unused networks, dangling images
 docker system df                          # Disk usage breakdown
 docker info                               # Full daemon info (OS type, version, storage driver)
@@ -874,7 +876,7 @@ docker info                               # Full daemon info (OS type, version, 
 ### Hyper-V VM Management
 
 ```powershell
-# ── VM LIFECYCLE ──────────────────────────────────────────────────
+# ───────── VM LIFECYCLE ─────────
 Get-VM                                    # List all VMs
 Get-VM -Name "Ubuntu-Worker"             # Specific VM
 Start-VM -Name "Ubuntu-Worker"
@@ -885,12 +887,12 @@ Suspend-VM -Name "Ubuntu-Worker"         # Save state (hibernate)
 Resume-VM -Name "Ubuntu-Worker"
 Remove-VM -Name "Ubuntu-Worker" -Force
 
-# ── VM CONFIGURATION ──────────────────────────────────────────────
+# ───────── VM CONFIGURATION ─────────
 Set-VM -Name "Ubuntu-Worker" -ProcessorCount 8
 Set-VMMemory -VMName "Ubuntu-Worker" -StartupBytes 8GB
 Set-VMMemory -VMName "Ubuntu-Worker" -DynamicMemoryEnabled $true -MinimumBytes 2GB -MaximumBytes 16GB
 
-# ── DISK MANAGEMENT ───────────────────────────────────────────────
+# ───────── DISK MANAGEMENT ─────────
 New-VHD -Path "C:\HyperV-Disks\data.vhdx" -SizeBytes 50GB -Dynamic
 Add-VMHardDiskDrive -VMName "Ubuntu-Worker" -Path "C:\HyperV-Disks\data.vhdx"
 Get-VMHardDiskDrive -VMName "Ubuntu-Worker"
@@ -899,19 +901,19 @@ Remove-VMHardDiskDrive -VMName "Ubuntu-Worker" -ControllerType SCSI -ControllerN
 # Compact a VHDX file (reclaim unused space)
 Optimize-VHD -Path "C:\HyperV-Disks\Ubuntu-Worker.vhdx" -Mode Full
 
-# ── SNAPSHOTS/CHECKPOINTS ─────────────────────────────────────────
+# ───────── SNAPSHOTS/CHECKPOINTS ─────────
 Checkpoint-VM -Name "Ubuntu-Worker" -SnapshotName "Pre-k3s-install"
 Get-VMCheckpoint -VMName "Ubuntu-Worker"
 Restore-VMCheckpoint -VMName "Ubuntu-Worker" -VMCheckpointName "Pre-k3s-install" -Confirm:$false
 Remove-VMCheckpoint -VMName "Ubuntu-Worker" -VMCheckpointName "Pre-k3s-install"
 
-# ── NETWORKING ────────────────────────────────────────────────────
+# ───────── NETWORKING ─────────
 Get-VMSwitch
 Get-VMNetworkAdapter -VMName "Ubuntu-Worker"
 Add-VMNetworkAdapter -VMName "Ubuntu-Worker" -SwitchName "Lab-External"
 Set-VMNetworkAdapter -VMName "Ubuntu-Worker" -StaticMacAddress "00-15-5D-00-01-01"
 
-# ── MONITORING ────────────────────────────────────────────────────
+# ───────── MONITORING ─────────
 Get-VM | Select-Object Name, State, CPUUsage, MemoryAssigned, Uptime
 Measure-VM -Name "Ubuntu-Worker"         # Detailed resource measurement
 Get-VMVideo -VMName "Ubuntu-Worker"      # Display adapter info
@@ -920,7 +922,7 @@ Get-VMVideo -VMName "Ubuntu-Worker"      # Display adapter info
 ### WSL2 Management
 
 ```powershell
-# ── DISTRO MANAGEMENT ─────────────────────────────────────────────
+# ───────── DISTRO MANAGEMENT ─────────
 wsl --list --verbose                      # List distros with state and WSL version
 wsl --install -d Ubuntu-22.04            # Install distro
 wsl --set-default Ubuntu-22.04           # Set default
@@ -928,22 +930,22 @@ wsl --set-version Ubuntu-22.04 2         # Upgrade distro to WSL2
 wsl --shutdown                            # Stop ALL WSL2 distros and the utility VM
 wsl --terminate Ubuntu-22.04             # Stop specific distro
 
-# ── RUNNING COMMANDS ──────────────────────────────────────────────
+# ───────── RUNNING COMMANDS ─────────
 wsl                                       # Open default distro
 wsl -d Ubuntu-22.04                       # Open specific distro
 wsl -e ls /home                           # Run single command and exit
 wsl -u root                               # Open as root
 wsl -- cat /etc/os-release               # Run command with -- separator
 
-# ── FILESYSTEM ────────────────────────────────────────────────────
+# ───────── FILESYSTEM ─────────
 # Access WSL2 filesystem from Windows File Explorer or PowerShell:
-Get-ChildItem \\wsl$\Ubuntu\home\dale\
+Get-ChildItem \\wsl$\Ubuntu\home\<user>\
 
-# ── BACKUP AND RESTORE ────────────────────────────────────────────
+# ───────── BACKUP AND RESTORE ─────────
 wsl --export Ubuntu-22.04 "D:\Backups\ubuntu.tar"
 wsl --import Ubuntu-Restored "C:\WSL\Ubuntu-Restored" "D:\Backups\ubuntu.tar"
 
-# ── DIAGNOSTICS ───────────────────────────────────────────────────
+# ───────── DIAGNOSTICS ─────────
 wsl --version
 wsl --status
 wsl --update
@@ -962,7 +964,7 @@ Restart-Service docker
 Get-Service hns
 Restart-Service hns                       # Fixes many Windows container networking issues
 
-# ── DOCKER DAEMON CONFIG ──────────────────────────────────────────
+# ───────── DOCKER DAEMON CONFIG ─────────
 # Windows Docker daemon config file location:
 # C:\ProgramData\Docker\config\daemon.json
 
@@ -1066,7 +1068,7 @@ Kubernetes does not use Docker directly. It uses a **Container Runtime Interface
 |---------|---------|-------|
 | `containerd` | k3s (default), most production clusters | Lightweight, no Docker daemon required |
 | `CRI-O` | OpenShift | RedHat's runtime |
-| `Docker` (via dockershim) | Legacy — deprecated in k8s 1.24+ | No longer supported |
+| `Docker` (via dockershim) | Legacy — removed in k8s 1.24+ | No longer supported |
 
 k3s ships with `containerd` built in. When Kubernetes schedules a Pod, it calls `containerd`, which pulls the image and creates the container.
 
@@ -1128,10 +1130,14 @@ spec:
 
 ### Requirements for Windows Worker Nodes
 
-- **Windows Server 2019 or 2022** (not Windows 10/11 — desktop editions are not supported as production k8s nodes)
+- **Windows Server 2022 or Windows Server 2025** for current Kubernetes releases (Windows Server 2019 was supported in older Kubernetes versions but is no longer listed as a tested/supported Windows Server release for current Kubernetes — check the Kubernetes Windows OS version compatibility page for your specific Kubernetes version before standardizing on an OS image)
+- Desktop editions (Windows 10/11) are not supported as production Kubernetes nodes
 - WSL2-based Windows machines **can** join as Linux worker nodes (they expose a Linux kernel to k3s)
 - The **Control Plane must always be Linux** — no exceptions
 - Container runtime on Windows nodes: `containerd` with the `containerd-shim-runhcs-v1` shim (handles Windows containers)
+- **Kubernetes does not support Hyper-V isolation for Windows containers at all** — only Process Isolation, which requires the Windows node's OS build to exactly match the container's base image version (see Section 4's isolation-mode discussion)
+
+> ⚠️ **k3s's Windows agent support is less mature than standard Kubernetes' Windows worker support.** Standard Kubernetes (via `kubeadm`) has well-established, documented Windows worker node support going back several releases. k3s's own project maintainers have described Windows node support as still experimental and under active development. If a production-grade mixed Linux/Windows cluster is the goal, evaluate whether standard `kubeadm`-based Kubernetes is a better fit for the Windows side than k3s — or budget real troubleshooting time if proceeding with k3s's Windows agent, rather than expecting the same plug-and-play experience as joining a Linux agent.
 
 ### Joining a Windows Node to k3s
 
@@ -1226,7 +1232,7 @@ This means you can run a Windows Server VM as a Kubernetes workload — not as a
 | Scenario | Use KubeVirt VM | Use Windows Container |
 |----------|----------------|----------------------|
 | Legacy Windows app that needs full OS | ✅ | ❌ |
-| App requiring specific Windows kernel version | ✅ | ⚠️ (Hyper-V isolation) |
+| App requiring specific Windows kernel version | ✅ | ⚠️ (Hyper-V isolation, standalone Docker only — not available inside Kubernetes) |
 | High-density microservices | ❌ | ✅ |
 | App using kernel-mode drivers | ✅ | ❌ |
 | Fast startup required | ❌ | ✅ |
@@ -1278,7 +1284,7 @@ In a hybrid Kubernetes cluster, Linux and Windows nodes communicate over standar
 Flannel creates an overlay network (VXLAN by default) that encapsulates pod traffic across nodes. Both Linux and Windows pods get an IP from the pod CIDR range. A Linux pod can reach a Windows pod and vice versa — the OS boundary is transparent at the network layer.
 
 ```
-[ Linux Pod: 10.42.0.5 ]  ──── VXLAN overlay ────  [ Windows Pod: 10.42.1.8 ]
+[ Linux Pod: 10.42.0.5 ]  ──────── VXLAN overlay ────────  [ Windows Pod: 10.42.1.8 ]
          │                                                      │
 [ Linux Node: 100.64.10.5 ]  ── Tailscale WireGuard ──  [ Windows Node: 100.64.10.20 ]
 ```
@@ -1308,14 +1314,21 @@ tailscale ip -4
 ping 100.64.10.5
 ```
 
-### Flannel VXLAN Port — Critical Windows Firewall Rule
+### Flannel VXLAN Port — Critical Windows Firewall Rule (and it's NOT the same port as Linux)
 
-Flannel uses **UDP port 4789** for its VXLAN overlay tunnel traffic. On Linux nodes this port is handled automatically. On Windows nodes, the Windows Firewall blocks this port by default, which causes pod-to-pod communication across OS boundaries to silently fail — pods appear healthy but cannot reach each other across the Linux/Windows node boundary.
+Flannel's VXLAN overlay uses different default UDP ports depending on the node's OS — this is a detail worth getting exactly right, because the two numbers look similar enough to mix up:
 
-You must explicitly allow UDP 4789 on the Tailscale adapter on every Windows node joining the cluster:
+| OS | Default Flannel VXLAN UDP port |
+|---|---|
+| Linux | **8472** |
+| Windows | **4789** |
+
+This split is intentional and documented by the Flannel project itself — Windows VXLAN support uses a different port than the Linux kernel's default. On Linux nodes this port is handled automatically by the CNI setup. On Windows nodes, the Windows Firewall blocks UDP 4789 by default, which causes pod-to-pod communication across OS boundaries to silently fail — pods appear healthy but cannot reach each other across the Linux/Windows node boundary.
+
+You must explicitly allow UDP 4789 on the Tailscale adapter on every Windows node joining the cluster, **and** separately ensure UDP 8472 is reachable between Linux nodes (typically open by default on a homelab LAN/Tailscale mesh, but worth verifying explicitly if a host firewall is active on the Linux side too):
 
 ```powershell
-# Allow Flannel VXLAN traffic inbound on the Tailscale adapter
+# Allow Flannel VXLAN traffic inbound on the Tailscale adapter (Windows node, port 4789)
 New-NetFirewallRule `
   -Name "Flannel-VXLAN-Inbound" `
   -DisplayName "Flannel VXLAN Overlay (Inbound)" `
@@ -1339,7 +1352,16 @@ New-NetFirewallRule `
 Get-NetFirewallRule | Where-Object { $_.Name -like "Flannel*" }
 ```
 
-> ⚠️ **Symptom if this is missing:** Linux pods can reach other Linux pods across nodes fine. Windows pods can reach other Windows pods on the same node fine. But Linux pod → Windows pod (or vice versa) across node boundaries times out silently. `kubectl exec` into a Linux pod and `curl` the Windows service IP will hang indefinitely. This is almost always UDP 4789 being blocked.
+```bash
+# On Linux nodes, if a host firewall (ufw/firewalld) is active, allow UDP 8472
+# from the trusted node subnet — replace <node-subnet> with your actual range
+ufw allow proto udp from <node-subnet> to any port 8472
+# or, firewalld:
+firewall-cmd --permanent --zone=trusted --add-port=8472/udp
+firewall-cmd --reload
+```
+
+> ⚠️ **Symptom if either side's port is missing:** Linux pods can reach other Linux pods across nodes fine. Windows pods can reach other Windows pods on the same node fine. But Linux pod → Windows pod (or vice versa) across node boundaries times out silently. `kubectl exec` into a Linux pod and `curl` the Windows service IP will hang indefinitely. Check both port numbers — 8472 on the Linux side, 4789 on the Windows side — rather than assuming a single port number covers the whole cluster.
 
 ### Service Communication Across OS Boundaries
 
@@ -1435,23 +1457,23 @@ spec:
       effect: "NoSchedule"
 ```
 
-### Custom Node Labels for BrittainHub
+### Custom Node Labels for Your Homelab
 
 ```bash
 # Label nodes by location
-kubectl label node lab-1 brittainhub/location=local-rack
-kubectl label node lab-6 brittainhub/location=local-rack
-kubectl label node remote-edge brittainhub/location=remote-edge
+kubectl label node lab-1 homelab/location=local-rack
+kubectl label node lab-6 homelab/location=local-rack
+kubectl label node remote-edge homelab/location=remote-edge
 
 # Label by hardware tier
-kubectl label node beelink brittainhub/tier=high-compute
-kubectl label node optiplex-1 brittainhub/tier=worker
+kubectl label node beelink homelab/tier=high-compute
+kubectl label node optiplex-1 homelab/tier=worker
 
 # View all labels on a node
 kubectl get node lab-1 --show-labels
 
 # Select pods by custom label
-kubectl get pods -l brittainhub/tier=high-compute
+kubectl get pods -l homelab/tier=high-compute
 ```
 
 ---
@@ -1521,7 +1543,7 @@ wsl --shutdown
 diskpart
 
 # Step 3: In diskpart:
-select vdisk file="C:\Users\dale\AppData\Local\Packages\CanonicalGroupLimited.Ubuntu22.04LTS_79rhkp1fndgsc\LocalState\ext4.vhdx"
+select vdisk file="C:\Users\<User>\AppData\Local\Packages\CanonicalGroupLimited.Ubuntu22.04LTS_79rhkp1fndgsc\LocalState\ext4.vhdx"
 attach vdisk readonly
 compact vdisk
 detach vdisk
@@ -1626,8 +1648,10 @@ docker logs <container-name>
 
 # Version mismatch error
 # Error: "the container operating system does not match the host operating system"
-# Fix: Use Hyper-V isolation
+# Fix (standalone Docker only): Use Hyper-V isolation
 docker run --isolation=hyperv <image>
+# Fix (inside Kubernetes): rebuild/retag with a base image matching the
+# Windows node's exact OS version -- Hyper-V isolation is not an option here
 
 # HNS networking failure
 # Error: "HNS failed with error: The object already exists"
@@ -1680,6 +1704,9 @@ kubectl get pods -n kube-system | grep flannel
 kubectl logs -n kube-system <flannel-pod>
 # On Windows node — check flannel service
 Get-Service flanneld
+# Remember: Linux side uses UDP 8472, Windows side uses UDP 4789 -- check
+# firewall rules for BOTH numbers, on both node types, before assuming the
+# CNI itself is broken
 ```
 
 ---
@@ -1692,7 +1719,7 @@ Get-Service flanneld
 
 3. **Multi-platform images exist but are automatic.** Docker Hub images like `nginx:latest` are actually image manifests that point to different actual images per OS/arch. When you `docker pull nginx:latest` on Linux you get the Linux amd64 image. On Windows you might get a Windows image if one exists — but most open-source images only have Linux variants.
 
-4. **Hyper-V isolation has overhead.** Every container in Hyper-V isolation mode boots a micro-VM. On a system running 50 containers, that is 50 micro-VMs. Memory overhead is real. Process isolation is faster but requires exact version matching.
+4. **Hyper-V isolation has overhead, and isn't available everywhere.** Every container in Hyper-V isolation mode boots a micro-VM. On a system running 50 containers, that is 50 micro-VMs. Memory overhead is real. Process isolation is faster but requires exact version matching. And inside Kubernetes specifically, Hyper-V isolation isn't supported at all — Process Isolation with exact version matching is the only option there.
 
 5. **WSL2 is a Linux worker, not a Windows worker.** When you run `k3s-agent` inside WSL2, the Kubernetes cluster sees a Linux node, not a Windows node. Windows containers cannot run on a WSL2-based worker. WSL2 runs Linux containers only.
 
@@ -1702,9 +1729,11 @@ Get-Service flanneld
 
 8. **Windows container networking resets on HNS restart.** All container network connections drop when you restart HNS. Running `docker ps` after will show containers are still alive but their IPs may have shifted. Restart containers after HNS restart.
 
-9. **Windows Kubernetes nodes need the Flannel Windows overlay.** The standard Linux Flannel DaemonSet does not run on Windows. k3s handles this automatically, but on raw Kubernetes you must deploy the Windows-specific Flannel manifest separately.
+9. **Windows Kubernetes nodes need the Flannel Windows overlay, and a different VXLAN port than Linux.** The standard Linux Flannel DaemonSet does not run on Windows. k3s handles this automatically, but on raw Kubernetes you must deploy the Windows-specific Flannel manifest separately — and remember that Flannel's VXLAN default port is 4789 on Windows, not the 8472 used on Linux.
 
 10. **etcd latency kills hybrid clusters at WAN distances.** Keep all control plane nodes under 10ms RTT from each other. Remote Windows or Linux workers are fine as Workers over Tailscale. etcd over WAN = cluster freeze.
+
+11. **k3s's Windows worker support is less mature than standard Kubernetes' Windows worker support.** Treat it as an evolving feature rather than a fully battle-tested one — budget extra troubleshooting time, and check the k3s project's current issue tracker for known Windows-agent limitations before committing a production workload to it.
 
 ---
 
@@ -1739,14 +1768,14 @@ docker run -it mcr.microsoft.com/windows/servercore:ltsc2022 powershell.exe
 # Inside the container:
 Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" | Select-Object ProductName, CurrentBuild
 Get-ChildItem HKLM:\SYSTEM\CurrentControlSet\Services | Select-Object -First 10 Name
-New-Item -Path "HKLM:\SOFTWARE\BrittainTest" -Force
-Set-ItemProperty -Path "HKLM:\SOFTWARE\BrittainTest" -Name "Version" -Value "1.0"
-Get-ItemProperty "HKLM:\SOFTWARE\BrittainTest"
+New-Item -Path "HKLM:\SOFTWARE\HomelabTest" -Force
+Set-ItemProperty -Path "HKLM:\SOFTWARE\HomelabTest" -Name "Version" -Value "1.0"
+Get-ItemProperty "HKLM:\SOFTWARE\HomelabTest"
 exit
 
 # After exiting — verify registry change is gone (new container = fresh registry)
 docker run -it mcr.microsoft.com/windows/servercore:ltsc2022 powershell.exe
-Test-Path "HKLM:\SOFTWARE\BrittainTest"   # Should return False
+Test-Path "HKLM:\SOFTWARE\HomelabTest"   # Should return False
 exit
 ```
 
@@ -1785,11 +1814,11 @@ kubectl get nodes --show-labels
 # Check the OS label specifically
 kubectl get nodes -L kubernetes.io/os
 
-# Apply a custom BrittainHub label
-kubectl label node <node-name> brittainhub/role=storage-node
+# Apply a custom homelab label
+kubectl label node <node-name> homelab/role=storage-node
 
 # Verify
-kubectl get node <node-name> --show-labels | tr ',' '\n' | grep brittainhub
+kubectl get node <node-name> --show-labels | tr ',' '\n' | grep homelab
 
 # Deploy a test pod constrained to Linux nodes only
 kubectl run linux-only-test \
@@ -1839,7 +1868,7 @@ wsl --shutdown
 | Full isolation between workloads | VM (any hypervisor) |
 | High density (100+ instances per host) | Containers |
 | Proxmox full service instance | LXC container or KVM VM |
-| BrittainHub service (Gitea, Mattermost) | Proxmox LXC or Docker Compose stack |
+| Homelab service (Gitea, Mattermost) | Proxmox LXC or Docker Compose stack |
 
 ### Mode Switch Quick Reference
 
@@ -1863,6 +1892,13 @@ wsl --shutdown
 | Taint Windows node | `kubectl taint nodes <name> os=windows:NoSchedule` |
 | Tolerate Windows taint | `tolerations: [{key: "os", value: "windows", effect: "NoSchedule"}]` |
 
+### Flannel VXLAN Port Quick Reference
+
+| OS | Default UDP Port |
+|---|---|
+| Linux | 8472 |
+| Windows | 4789 |
+
 ### File and Path Reference
 
 | Path | Purpose |
@@ -1880,6 +1916,5 @@ wsl --shutdown
 
 ---
 
-*File: `windows-linux-containers-vms-complete.md`*  
+*File: `windows-linux-containers-vms-complete.md`*
 *See also: `kubernetes-hybrid-architecture.md` | `windows-dockerfile-patterns.md`*
-
