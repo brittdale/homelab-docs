@@ -1219,47 +1219,42 @@ CMD ["app.exe"]
 
 ### Pattern 5: SQL Server with Pre-loaded Schema
 
+> ⚠️ **Microsoft's official SQL Server container images (`mcr.microsoft.com/mssql/server`) are Linux-based — not Windows containers.** Run them in **Linux container mode** (the default for Docker Desktop). Do not use these images in Windows container mode; they will fail to pull with an OS mismatch error. If you genuinely need SQL Server inside a Windows container, you would install SQL Server Express silently into a `servercore` base image, which results in a very large image and significant complexity — for most use cases the Linux image is the right choice.
+
 ```dockerfile
+# Linux container — ensure Docker is in Linux mode (docker info | findstr "OSType" → linux)
 FROM mcr.microsoft.com/mssql/server:2022-latest
 
 ENV ACCEPT_EULA=Y
 ENV SA_PASSWORD=YourStrongPassword123!
 ENV MSSQL_PID=Express
 
-COPY schema.sql C:\setup\schema.sql
-COPY init.ps1 C:\setup\init.ps1
+COPY schema.sql /setup/schema.sql
+COPY init.sh /setup/init.sh
 
-# init.ps1 waits for SQL Server to start, then runs schema.sql
-CMD ["powershell", "-File", "C:\\setup\\init.ps1"]
+RUN chmod +x /setup/init.sh
+CMD ["/setup/init.sh"]
 ```
 
-```powershell
-# init.ps1
-$ErrorActionPreference = 'Stop'
+```bash
+#!/bin/bash
+# init.sh — starts SQL Server, waits for readiness, applies schema
+set -e
 
-# Start SQL Server in background
-Start-Process -FilePath "C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLSERVER\MSSQL\Binn\sqlservr.exe" -NoNewWindow
+/opt/mssql/bin/sqlservr &
 
-# Wait for SQL Server to be ready
-Write-Host "Waiting for SQL Server to start..."
-$retries = 30
-while ($retries -gt 0) {
-    try {
-        Invoke-Sqlcmd -ServerInstance "localhost" -Query "SELECT 1" -ErrorAction Stop
-        Write-Host "SQL Server is ready."
-        break
-    } catch {
-        $retries--
-        Start-Sleep 2
-    }
-}
+echo "Waiting for SQL Server to start..."
+for i in {1..30}; do
+    /opt/mssql-tools18/bin/sqlcmd -S localhost -U SA -P "$SA_PASSWORD" \
+        -C -Q "SELECT 1" > /dev/null 2>&1 && break
+    sleep 2
+done
 
-# Run schema
-Invoke-Sqlcmd -ServerInstance "localhost" -InputFile "C:\setup\schema.sql"
-Write-Host "Schema applied."
+/opt/mssql-tools18/bin/sqlcmd -S localhost -U SA -P "$SA_PASSWORD" \
+    -C -i /setup/schema.sql
+echo "Schema applied."
 
-# Keep container alive
-Wait-Process -Name sqlservr
+wait
 ```
 
 ---
